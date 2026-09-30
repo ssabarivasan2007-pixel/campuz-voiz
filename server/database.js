@@ -2,6 +2,7 @@ import 'dotenv/config'
 import bcrypt from 'bcryptjs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import mongoose from 'mongoose'
 
@@ -17,6 +18,7 @@ const userSchema = new mongoose.Schema({
   department: String,
   year: String,
   email: String,
+  phone: String,
   subject: String,
   passwordHash: { type: String, required: true, select: false },
 }, { timestamps: true })
@@ -40,10 +42,38 @@ const feedbackSchema = new mongoose.Schema({
   sentiment: { type: String, default: 'Unclassified' },
   priorityScore: { type: Number, default: 0 },
   priorityLevel: { type: String, default: 'Low' },
+  status: { type: String, enum: ['Report Sent', 'Report Visit', 'Solution in Progress', 'Solved'], default: 'Report Sent' },
+  actionLevel: { type: String, default: 'Monitor' },
+  actionRequired: { type: Boolean, default: false },
+}, { timestamps: true })
+
+const alertSchema = new mongoose.Schema({
+  alertId: { type: String, required: true },
+  alertKey: { type: String, unique: true, required: true },
+  category: { type: String, required: true },
+  subcategory: String,
+  issue: { type: String, required: true },
+  department: { type: String, required: true },
+  year: String,
+  facultyId: String,
+  subject: String,
+  matchingReportCount: { type: Number, required: true },
+  relevantStudentCount: { type: Number, required: true },
+  percentage: { type: Number, required: true },
+  sentiment: { type: String, required: true },
+  priority: { type: String, required: true },
+  trend: { type: String, required: true },
+  recipients: [{ name: String, email: String, role: String }],
+  notificationStatus: { type: String, enum: ['Pending', 'Sending', 'Sent', 'Development Mode', 'Failed'], default: 'Pending' },
+  reportingPeriod: { type: String, required: true },
+  relatedReportIds: [String],
+  currentStatus: { type: String, default: 'Report Sent' },
+  lastNotifiedAt: Date,
 }, { timestamps: true })
 
 const User = mongoose.models.User || mongoose.model('User', userSchema)
 const Feedback = mongoose.models.Feedback || mongoose.model('Feedback', feedbackSchema)
+const Alert = mongoose.models.Alert || mongoose.model('Alert', alertSchema)
 
 const demoUsers = [
   { loginId: '20247369', role: 'student', name: 'Sabarivasan S', year: '3rd Year', department: 'CSE', email: '20247369@campuz.edu', password: 'Sabari@1876' },
@@ -99,6 +129,9 @@ export async function connectDatabase() {
     } catch {
       localData = { users: [], feedback: [] }
     }
+    localData.users ??= []
+    localData.feedback ??= []
+    localData.alerts ??= []
   }
   await seedUsers()
   return mongoMode ? 'MongoDB' : 'local file store'
@@ -142,7 +175,7 @@ export function toPublicUser(user) {
 }
 
 export async function updateFeedback(reportId, updates) {
-  if (mongoMode) return Feedback.updateOne({ reportId }, { $set: updates })
+  if (mongoMode) return Feedback.findOneAndUpdate({ reportId }, { $set: updates }, { new: true, runValidators: true }).lean()
   const report = localData.feedback.find((item) => item.reportId === reportId)
   if (!report) return null
   Object.assign(report, updates, { updatedAt: new Date().toISOString() })
@@ -161,4 +194,118 @@ export async function createUser(user) {
   localData.users.push(saved)
   await writeLocal()
   return publicUser(saved)
+}
+
+export async function findFeedbackByReportId(reportId) {
+  if (mongoMode) return Feedback.findOne({ reportId }).lean()
+  return localData.feedback.find((report) => report.reportId === reportId) ?? null
+}
+
+export async function updateUserById(id, updates) {
+  if (mongoMode) return User.findByIdAndUpdate(id, { $set: updates }, { new: true, runValidators: true }).lean()
+  const user = localData.users.find((item) => item.id === id)
+  if (!user) return null
+  Object.assign(user, updates, { updatedAt: new Date().toISOString() })
+  await writeLocal()
+  return publicUser(user)
+}
+
+export async function deleteUserById(id) {
+  if (mongoMode) return User.findByIdAndDelete(id).lean()
+  const index = localData.users.findIndex((item) => item.id === id)
+  if (index < 0) return null
+  const [user] = localData.users.splice(index, 1)
+  await writeLocal()
+  return publicUser(user)
+}
+
+export async function listFaculty() {
+  if (mongoMode) return User.find({ role: 'faculty' }).select('loginId name subject department').sort({ name: 1 }).lean()
+  return localData.users.filter((user) => user.role === 'faculty').map(({ loginId, name, subject, department }) => ({ loginId, name, subject, department }))
+}
+
+export async function countRelevantStudents({ department, year }) {
+  const query = { role: 'student', department, year }
+  if (mongoMode) return User.countDocuments(query)
+  return localData.users.filter((user) => user.role === 'student' && user.department === department && user.year === year).length
+}
+
+export async function upsertAlert(alert) {
+  const { alertKey, ...updates } = alert
+  if (mongoMode) {
+    try {
+      return await Alert.findOneAndUpdate(
+        { alertKey },
+        { $set: updates, $setOnInsert: { alertId: randomUUID(), alertKey, notificationStatus: 'Pending', lastNotifiedAt: null } },
+        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true },
+      ).lean()
+    } catch (error) {
+      if (error.code !== 11000) throw error
+      return Alert.findOneAndUpdate({ alertKey }, { $set: updates }, { new: true, runValidators: true }).lean()
+    }
+  }
+  const existing = localData.alerts.find((item) => item.alertKey === alertKey)
+  if (existing) {
+    Object.assign(existing, updates, { updatedAt: new Date().toISOString() })
+    await writeLocal()
+    return existing
+  }
+  const created = { ...updates, alertKey, alertId: randomUUID(), notificationStatus: 'Pending', lastNotifiedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+  localData.alerts.push(created)
+  await writeLocal()
+  return created
+}
+
+export async function claimAlertNotification(alertKey) {
+  if (mongoMode) {
+    return Alert.findOneAndUpdate(
+      { alertKey, notificationStatus: 'Pending' },
+      { $set: { notificationStatus: 'Sending' } },
+      { new: true },
+    ).lean()
+  }
+  const alert = localData.alerts.find((item) => item.alertKey === alertKey && item.notificationStatus === 'Pending')
+  if (!alert) return null
+  alert.notificationStatus = 'Sending'
+  alert.updatedAt = new Date().toISOString()
+  await writeLocal()
+  return alert
+}
+
+export async function updateAlert(alertKey, updates) {
+  if (mongoMode) return Alert.findOneAndUpdate({ alertKey }, { $set: updates }, { new: true, runValidators: true }).lean()
+  const alert = localData.alerts.find((item) => item.alertKey === alertKey)
+  if (!alert) return null
+  Object.assign(alert, updates, { updatedAt: new Date().toISOString() })
+  await writeLocal()
+  return alert
+}
+
+export async function listAlerts() {
+  if (mongoMode) return Alert.find().sort({ createdAt: -1 }).lean()
+  return [...localData.alerts].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
+}
+
+export async function clearFeedbackAndAlerts() {
+  if (mongoMode) {
+    await Promise.all([Feedback.deleteMany({}), Alert.deleteMany({})])
+    return
+  }
+  localData.feedback = []
+  localData.alerts = []
+  await writeLocal()
+}
+
+export async function updateAlertsForReport(reportId, status) {
+  if (mongoMode) return Alert.updateMany({ relatedReportIds: reportId }, { $set: { currentStatus: status } })
+  let matched = false
+  for (const alert of localData.alerts) {
+    if (alert.relatedReportIds?.includes(reportId)) {
+      alert.currentStatus = status
+      alert.updatedAt = new Date().toISOString()
+      matched = true
+    }
+  }
+  if (matched) await writeLocal()
+  return matched
 }

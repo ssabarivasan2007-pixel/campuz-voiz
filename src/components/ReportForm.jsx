@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, ShieldCheck } from 'lucide-react'
 import { request } from '../services/api'
 
@@ -43,16 +43,15 @@ const reports = {
       'Are activity announcements communicated clearly?', 'Are students encouraged to participate?', 'Are activities useful for student development?',
     ],
   },
-  'Monthly Pulses': {
-    group: 'CAMPUS-WIDE CHECK-IN',
-    sections: {
-      'Course & learning': ['Course material is useful and understandable.', 'The course pace gives me room to learn.', 'I have enough time to ask questions.'],
-      'Faculty & support': ['Teaching is clear and approachable.', 'My questions receive helpful responses.', 'Practical learning is part of my classes.'],
-      'Campus & facilities': ['Campus Wi-Fi works where I need it.', 'Learning spaces and labs support my work.', 'I can find the resources I need.'],
-      'Activities & belonging': ['Activities are communicated clearly.', 'I have meaningful ways to participate.', 'Campus activities help me grow.'],
-    },
-  },
 }
+
+const monthlySections = [
+  { title: 'Course', questions: reports.Course.questions, comment: 'What should be improved?' },
+  { title: 'Faculty', questions: reports.Faculty.questions, comment: 'Other suggestions/comments' },
+  { title: 'Infrastructure / Wi-Fi', questions: reports.Infrastructure.questions.WiFi, comment: 'What improvement is needed for Wi-Fi?' },
+  { title: 'Infrastructure / Laboratory', questions: reports.Infrastructure.questions.Laboratory, comment: 'What improvement is needed for the laboratory?' },
+  { title: 'Activity', questions: reports.Activity.questions, comment: 'What improvements would you suggest?' },
+]
 
 const categories = [
   { name: 'Course', title: 'Course', description: 'Learning, materials & pace', symbol: '01' },
@@ -69,12 +68,21 @@ export function ReportForm({ user, initialCategory, onSubmitted }) {
   const [category, setCategory] = useState(initialCategory)
   const [subcategory, setSubcategory] = useState('')
   const [answers, setAnswers] = useState({})
+  const [pulseComments, setPulseComments] = useState({})
   const [comments, setComments] = useState('')
   const [profile, setProfile] = useState({ department: user.department, year: user.year, email: user.email })
   const [faculty, setFaculty] = useState({ facultyId: '', subject: '', facultyDepartment: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [submissionKey] = useState(() => crypto.randomUUID())
+  const [facultyOptions, setFacultyOptions] = useState([])
+
+  useEffect(() => {
+    if (category !== 'Faculty') return
+    let active = true
+    request('/faculty/options').then(({ faculty }) => { if (active) setFacultyOptions(faculty) }).catch((problem) => { if (active) setError(problem.message) })
+    return () => { active = false }
+  }, [category])
 
   function chooseCategory(next) { setCategory(next); setSubcategory(''); setAnswers({}); setError('') }
 
@@ -82,7 +90,7 @@ export function ReportForm({ user, initialCategory, onSubmitted }) {
   const questionGroups = category === 'Infrastructure'
     ? (subcategory ? [{ title: subcategory === 'WiFi' ? 'WI-FI' : 'LABORATORY', questions: survey.questions[subcategory] }] : [])
     : category === 'Monthly Pulses'
-      ? Object.entries(survey.sections).map(([title, questions]) => ({ title, questions }))
+      ? monthlySections
       : survey?.questions ? [{ title: survey.group, questions: survey.questions }] : []
   const totalQuestions = questionGroups.reduce((sum, group) => sum + group.questions.length, 0)
   const answered = Object.keys(answers).length
@@ -99,9 +107,15 @@ export function ReportForm({ user, initialCategory, onSubmitted }) {
     if (category === 'Faculty' && commentsWords > 100) { setError('Please keep faculty suggestions within 100 words.'); return }
     setBusy(true)
     try {
+      const monthlyAnswers = category === 'Monthly Pulses'
+        ? { ...answers, ...Object.fromEntries(monthlySections.map((section) => [section.comment, pulseComments[section.comment] ?? ''])) }
+        : answers
+      const submittedComments = category === 'Monthly Pulses'
+        ? monthlySections.map((section) => pulseComments[section.comment] ? `${section.comment}: ${pulseComments[section.comment]}` : '').filter(Boolean).join('\n')
+        : comments
       const result = await request('/reports', {
         method: 'POST',
-        body: JSON.stringify({ ...profile, ...faculty, category, subcategory, answers, comments, submissionKey }),
+        body: JSON.stringify({ ...profile, ...faculty, category, subcategory, answers: monthlyAnswers, ratings: answers, comments: submittedComments, submissionKey }),
       })
       onSubmitted(result.reportId)
     } catch (problem) {
@@ -126,19 +140,14 @@ export function ReportForm({ user, initialCategory, onSubmitted }) {
       </div>
       {!profileValid && <p className="inline-warning">These details need to match your registered student profile.</p>}
       {category === 'Infrastructure' && <div className="subtype-selector"><span>CHOOSE A FACILITY</span><div>{survey.choices.map((choice) => <button type="button" key={choice} className={subcategory === choice ? 'selected' : ''} onClick={() => { setSubcategory(choice); setAnswers({}) }}>{choice === 'WiFi' ? 'Wi-Fi' : choice}</button>)}</div></div>}
-      {category === 'Faculty' && <div className="faculty-fields"><label>Faculty<select value={faculty.facultyId} onChange={(event) => { const facultyId = event.target.value; const selected = facultyOptions.find((option) => option.id === facultyId); setFaculty({ facultyId, subject: selected?.subject || '', facultyDepartment: selected?.department || '' }) }}><option value="">Select faculty</option>{facultyOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><label>Subject<select value={faculty.subject} onChange={(event) => setFaculty({ ...faculty, subject: event.target.value })}><option value="">Select subject</option><option>Python</option><option>Java</option></select></label><label>Department<select value={faculty.facultyDepartment} onChange={(event) => setFaculty({ ...faculty, facultyDepartment: event.target.value })}><option value="">Select department</option><option>CSE</option><option>Food Technology</option></select></label></div>}
-      {questionGroups.map((group) => <div className="question-group" key={group.title}><p className="eyebrow">{group.title}</p>{group.questions.map((question, index) => <RatingQuestion key={question} question={question} index={index + 1} value={answers[question]} onChange={(value) => setAnswers({ ...answers, [question]: value })} />)}</div>)}
+      {category === 'Faculty' && <div className="faculty-fields"><label>Faculty<select value={faculty.facultyId} onChange={(event) => { const facultyId = event.target.value; const selected = facultyOptions.find((option) => option.id === facultyId); setFaculty({ facultyId, subject: selected?.subject || '', facultyDepartment: selected?.department || '' }) }} required><option value="">{facultyOptions.length ? 'Select faculty' : 'Loading faculty…'}</option>{facultyOptions.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></label><label>Subject<input value={faculty.subject} readOnly aria-readonly="true" placeholder="Selected faculty subject" /></label><label>Department<input value={faculty.facultyDepartment} readOnly aria-readonly="true" placeholder="Selected faculty department" /></label></div>}
+      {questionGroups.map((group) => <div className="question-group" key={group.title}><p className="eyebrow">{group.title}</p>{group.questions.map((question, index) => <RatingQuestion key={question} question={question} index={index + 1} value={answers[question]} onChange={(value) => setAnswers({ ...answers, [question]: value })} />)}{category === 'Monthly Pulses' && <label className="comments-field monthly-comment">{group.comment}<textarea value={pulseComments[group.comment] ?? ''} onChange={(event) => setPulseComments({ ...pulseComments, [group.comment]: event.target.value })} maxLength={150} rows={2} placeholder="Optional" /></label>}</div>)}
       {category !== 'Infrastructure' || subcategory ? <label className="comments-field">{category === 'Faculty' ? 'Other suggestions / comments' : category === 'Infrastructure' ? 'What improvement is needed?' : category === 'Activity' ? 'What improvements would you suggest?' : 'What should be improved?'}<textarea value={comments} onChange={(event) => setComments(event.target.value)} maxLength={category === 'Faculty' ? 700 : 1000} rows={4} placeholder="Share a little more, if you’d like…" /><span className="field-footnote">{category === 'Faculty' ? `${commentsWords}/100 words` : `${comments.length}/1,000 characters`} · Optional</span></label> : null}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="submit-row"><span>{answered} of {totalQuestions} ratings completed</span><button className="button button-dark" type="submit" disabled={busy}>{busy ? 'Sending…' : category === 'Course' ? 'Submit Course Feedback' : category === 'Monthly Pulses' ? 'Submit monthly pulse' : 'Submit feedback'} <ArrowRight size={17} /></button></div>
     </form>}
   </section>
 }
-
-const facultyOptions = [
-  { id: '20237369', name: 'Srishanth P', subject: 'Python', department: 'CSE' },
-  { id: '20236379', name: 'Saravana M', subject: 'Java', department: 'Food Technology' },
-]
 
 export function SuccessPage({ reportId, onDone }) {
   return <section className="success-page"><div className="success-mark"><Check size={31} /></div><p className="eyebrow">YOUR VOICE IS IN</p><h1>Thank you for<br /><em>your feedback!</em></h1><p>Your voice matters. Let’s wait for the change to begin.</p><span className="success-report-id">REFERENCE / {reportId}</span><button className="button button-dark" onClick={onDone}>View submission status <ArrowRight size={17} /></button></section>

@@ -21,9 +21,10 @@
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.468.0",
     "mongoose": "^8.19.1",
-    "recharts": "^2.15.4",
+    "nodemailer": "^10.0.13",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "recharts": "^2.15.4"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

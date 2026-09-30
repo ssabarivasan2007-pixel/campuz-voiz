@@ -1,6 +1,9 @@
 import { startTransition, useEffect, useState } from 'react'
-import { ArrowRight, UserPlus, UsersRound } from 'lucide-react'
+import { ArrowLeft, ArrowRight, GraduationCap, Pencil, Plus, Trash2, UserRound, UsersRound, X } from 'lucide-react'
 import { request } from '../services/api'
+
+const idPattern = '^\\d{8}$'
+const passwordPattern = '^(?=.*[A-Z])(?=.*[a-z])(?=.*[^A-Za-z0-9]).{8}$'
 
 export function UserManagement() {
   const [users, setUsers] = useState([])
@@ -8,6 +11,9 @@ export function UserManagement() {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [role, setRole] = useState('student')
+  const [mode, setMode] = useState('directory')
+  const [editing, setEditing] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(null)
 
   async function refreshUsers() {
     const result = await request('/admin/users')
@@ -18,18 +24,57 @@ export function UserManagement() {
     refreshUsers().catch((problem) => setError(problem.message))
   }, [])
 
-  async function createAccount(event) {
+  function openCreate(nextRole) {
+    setEditing(null)
+    setRole(nextRole)
+    setMode(nextRole)
+    setError('')
+    setNotice('')
+  }
+
+  function openEdit(user) {
+    setEditing(user)
+    setRole(user.role)
+    setMode(user.role)
+    setError('')
+    setNotice('')
+  }
+
+  async function saveAccount(event) {
     event.preventDefault()
     setError('')
     setNotice('')
     setBusy(true)
     const formElement = event.currentTarget
     const form = new FormData(formElement)
-    const user = Object.fromEntries(form.entries())
+    const account = Object.fromEntries(form.entries())
     try {
-      await request('/admin/users', { method: 'POST', body: JSON.stringify(user) })
-      setNotice('Account created. Password is stored as a secure hash.')
-      formElement.reset()
+      if (editing) {
+        const updates = Object.fromEntries(Object.entries(account).filter(([, value]) => value !== ''))
+        delete updates.role
+        await request(`/admin/users/${encodeURIComponent(editing.id)}`, { method: 'PATCH', body: JSON.stringify(updates) })
+        setNotice('Account updated.')
+      } else {
+        await request('/admin/users', { method: 'POST', body: JSON.stringify(account) })
+        setNotice('Account created.')
+      }
+      await refreshUsers()
+      setMode('directory')
+      setEditing(null)
+    } catch (problem) {
+      setError(problem.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteAccount(user) {
+    setBusy(true)
+    setError('')
+    try {
+      await request(`/admin/users/${encodeURIComponent(user.id)}`, { method: 'DELETE' })
+      setConfirmDelete(null)
+      setNotice('Account deleted.')
       await refreshUsers()
     } catch (problem) {
       setError(problem.message)
@@ -38,20 +83,34 @@ export function UserManagement() {
     }
   }
 
+  function cancelForm() {
+    setMode('directory')
+    setEditing(null)
+    setError('')
+    setNotice('')
+  }
+
   return <section className="content-section user-management">
-    <div className="page-heading"><div><p className="eyebrow">ADMINISTRATION / DIRECTORY</p><h1>Manage users</h1><p className="page-intro">Registered campus accounts and role access.</p></div><span className="result-count">{users.length} ACCOUNTS</span></div>
-    <div className="user-layout">
-      <section className="user-directory"><div className="directory-heading"><UsersRound size={18} /><h2>Campus directory</h2></div>{users.map((user) => <article className="user-row" key={user.id}><span className="avatar">{user.name?.[0]}</span><div><strong>{user.name}</strong><span>{user.loginId} · {user.department || 'Administration'}{user.year ? ` · ${user.year}` : ''}{user.subject ? ` · ${user.subject}` : ''}</span></div><span className={`role-label role-${user.role}`}>{user.role}</span></article>)}</section>
-      <section className="user-create"><div className="directory-heading"><UserPlus size={18} /><h2>Add account</h2></div><form className="create-user-form" onSubmit={createAccount}>
-        <label>Account type<select name="role" value={role} onChange={(event) => setRole(event.target.value)}><option value="student">Student</option><option value="faculty">Faculty</option></select></label>
-        <label>Campus ID<input name="loginId" required placeholder="Enter a unique ID" /></label>
-        <label>Full name<input name="name" required placeholder="Enter full name" /></label>
-        <label>Department<select name="department" required><option value="">Select department</option><option>CSE</option><option>Food Technology</option></select></label>
-        {role === 'student' ? <><label>Year<select name="year" required><option value="">Select year</option>{['1st Year', '2nd Year', '3rd Year', '4th Year'].map((year) => <option key={year}>{year}</option>)}</select></label><label>Email<input name="email" type="email" required placeholder="student@campus.edu" /></label></> : <label>Subject<select name="subject" required><option value="">Select subject</option><option>Python</option><option>Java</option></select></label>}
-        <label>Password<input name="password" type="password" minLength="10" required placeholder="At least 10 characters" /></label>
-        {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="success-note">{notice}</p>}
-        <button className="button button-dark button-wide" disabled={busy}>{busy ? 'Creating…' : 'Create account'} <ArrowRight size={16} /></button>
-      </form><p className="password-note">Passwords are hashed before storage and never shown in the directory.</p></section>
-    </div>
+    <div className="page-heading users-heading"><div><p className="eyebrow">ADMINISTRATION / DIRECTORY</p><h1>Manage Users</h1></div>{mode === 'directory' && <button className="button button-dark" onClick={() => { setMode('choose'); setNotice('') }}><Plus size={16} /> Create Account</button>}</div>
+    {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="success-note" role="status">{notice}</p>}
+    {mode === 'choose' && <section className="account-choice"><button type="button" className="back-link" onClick={cancelForm}><ArrowLeft size={15} /> Back to users</button><h2>Choose account type</h2><div><button type="button" onClick={() => openCreate('student')}><span><GraduationIcon /></span><strong>Student Account</strong><ArrowRight size={17} /></button><button type="button" onClick={() => openCreate('faculty')}><span><UserRound size={20} /></span><strong>Faculty Account</strong><ArrowRight size={17} /></button></div></section>}
+    {mode === 'student' || mode === 'faculty' ? <section className="account-editor"><button type="button" className="back-link" onClick={cancelForm}><ArrowLeft size={15} /> Back to users</button><div className="directory-heading"><UserRound size={18} /><h2>{editing ? `Edit ${role} account` : `${role === 'student' ? 'Student' : 'Faculty'} Account`}</h2></div><form className="create-user-form account-form" onSubmit={saveAccount}>
+      {!editing && <input type="hidden" name="role" value={role} />}
+      <label>Name<input name="name" required defaultValue={editing?.name} placeholder="Full name" /></label>
+      {role === 'student' && <label>Year of pursuing<select name="year" required defaultValue={editing?.year || ''}><option value="">Select year</option>{['1st Year', '2nd Year', '3rd Year', '4th Year'].map((year) => <option key={year}>{year}</option>)}</select></label>}
+      {role === 'faculty' && <label>Core Subject<select name="subject" required defaultValue={editing?.subject || ''}><option value="">Select subject</option><option>Python</option><option>Java</option></select></label>}
+      <label>Department<select name="department" required defaultValue={editing?.department || ''}><option value="">Select department</option><option>CSE</option><option>Food Technology</option></select></label>
+      <label>Email<input name="email" type="email" required defaultValue={editing?.email || ''} placeholder="name@campus.edu" /></label>
+      {role === 'student' && <label>Phone number<input name="phone" type="tel" required defaultValue={editing?.phone || ''} placeholder="Phone number" /></label>}
+      <label>User ID<input name="loginId" inputMode="numeric" pattern={idPattern} maxLength="8" minLength="8" required defaultValue={editing?.loginId || ''} placeholder="8 digits" /></label>
+      <label>Password<input name="password" type="password" pattern={passwordPattern} maxLength="8" minLength={editing ? undefined : '8'} required={!editing} placeholder={editing ? 'Leave blank to keep current' : '8 chars: upper, lower, special'} /></label>
+      <p className="password-note">{editing ? 'Leave password blank to keep it unchanged.' : 'Exactly 8 characters, including uppercase, lowercase, and a special character.'} Passwords are never shown in the directory.</p>
+      <button className="button button-dark" disabled={busy}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create account'} <ArrowRight size={16} /></button>
+    </form></section> : null}
+    {mode === 'directory' && <section className="user-directory"><div className="directory-heading"><UsersRound size={18} /><h2>Campus directory</h2><span className="result-count">{users.length} ACCOUNTS</span></div>{users.map((user) => <article className="user-row" key={user.id}><span className="avatar">{user.name?.[0]}</span><div className="user-row-info"><strong>{user.name}</strong><span>{user.loginId} · {user.department || 'Administration'}{user.year ? ` · ${user.year}` : ''}{user.subject ? ` · ${user.subject}` : ''}</span></div><span className={`role-label role-${user.role}`}>{user.role}</span>{user.role !== 'admin' && <div className="user-actions"><button type="button" title="Edit account" aria-label={`Edit ${user.name}`} onClick={() => openEdit(user)}><Pencil size={15} /></button><button type="button" title="Delete account" aria-label={`Delete ${user.name}`} onClick={() => setConfirmDelete(user)}><Trash2 size={15} /></button></div>}{confirmDelete?.id === user.id && <div className="delete-confirm" role="alertdialog" aria-label={`Confirm deleting ${user.name}`}><span>Delete {user.name}?</span><button type="button" className="confirm-delete-button" disabled={busy} onClick={() => deleteAccount(user)}>Delete</button><button type="button" className="icon-button" aria-label="Cancel delete" onClick={() => setConfirmDelete(null)}><X size={14} /></button></div>}</article>)}</section>}
   </section>
+}
+
+function GraduationIcon() {
+  return <GraduationCap size={20} />
 }
