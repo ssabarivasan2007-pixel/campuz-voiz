@@ -1,0 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap');
+
+:root {
+  font-family: 'DM Sans', 'Trebuchet MS', sans-serif;
+  color: #202c28;
+  background: #f5f4ef;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --paper: #f5f4ef;
+  --white: #fffefa;
+  --ink: #202c28;
+  --muted: #737b74;
+  --line: #dfdfd6;
+  --forest: #28564d;
+  --forest-dark: #173d37;
+  --sea: #dbe9e2;
+  --coral: #cb7858;
+  --gold: #c1a265;
+  --serif: 'DM Serif Display', Georgia, serif;
+  color-scheme: light;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, select, textarea { font: inherit; }
+button { color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #2e7467; outline-offset: 3px; }
+::selection { background: #cadfd4; color: #173d37; }
+#root { min-height: 100vh; }
